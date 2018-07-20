@@ -59,13 +59,13 @@ IGNORE_DB="(^mysql|_schema$)"
 PATH=$PATH:/usr/local/mysql/bin
 
 # Number of days to keep backups
-KEEP_BACKUPS_FOR=7 				# days
+KEEP_BACKUPS_FOR=7 			# days
 
 # S3 Bucket
 S3_BUCKET=bucket/key
 
 # Day to upload
-UPLOAD_DAY=(1 7)					# Could be more than one, inside () separate by space
+UPLOAD_DAY=(1 7)			# Could be more than one, inside () separated by space
 
 #==============================================================================
 # FUNCTIONS
@@ -127,7 +127,7 @@ function backup_database(){
 	if [[ $mysqlexit = "0" ]]; then
 		echo_pluslog "$database backup completed successfully"
 	else
-		echo_pluslog "error $mysqlexit couldent backup $database db"
+		echo_pluslog "error $mysqlexit couldnt backup $database db"
 	fi
 }
 
