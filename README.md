@@ -13,7 +13,7 @@ To run from terminal:
 
 ```$ ./mysql_backup.sh [--cron] [--forceupload]```
 
-To add a cron job for daily db backup @ 3:30 am, edit the crontab whit `$ crontab -e`, then insert `30 3 * * * /home/user/mysql-backup.sh --cron` and save (wq!).
+To add a cron job for daily db backup @ 3:30 am, edit the crontab whit `$ crontab -e`, then insert `30 3 * * * /home/user/mysql-backup.sh --cron` and save.
 
 
 To restore a db from backup: ```$ gunzip < [backupfile.sql.gz] | mysql -u [uname] -p[pass] [dbname]```
