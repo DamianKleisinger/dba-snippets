@@ -1,6 +1,5 @@
 # MySQL-to-S3
-Backup all MySQL databases to a local folder and Amazon S3
-
+Backup MySQL databases to a local folder and Amazon S3
 
 **AWS CLI must be installed and configured:**
 
