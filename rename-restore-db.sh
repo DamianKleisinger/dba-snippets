@@ -11,7 +11,7 @@ eval set -- "$parsed_args"
 
 function print_help() {
   cat << EOF
-Usage: rename-restore-db.sh [OPTIONS]
+Usage: rename-db.sh [OPTIONS]
 Backup, Rename and Restore a MySQL database
 
 Options:
@@ -130,7 +130,9 @@ if [ $backup_size -lt 1 ]; then
   exit 3
 fi
 
-echo "DB size $db_size bytes, estimated backup size $backup_size bytes, starting backup..."
+echo "DB size $db_size bytes, estimated backup size $backup_size bytes"
+
+echo "Starting backup from ${ORIGIN_HOST}..."
 mysqldump --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host=${ORIGIN_IP} --compress --databases ${ORIGIN_DB} --extended-insert --opt | pv -W -s ${backup_size} > "${BACKUP_FILE}"
 
 RETURN_1=$?
@@ -143,12 +145,12 @@ fi
 echo "DB Backup completed at ${BACKUP_FILE}"
 
 if [ "$KEEP_DB_NAME" != true ]; then
+  echo "Replacing DB name in ${REPLACED_BACKUP} from ${ORIGIN_DB} to ${DESTINATION_DB}..."
   total_lines=$(wc -l < "$BACKUP_FILE")
   pv "$BACKUP_FILE" | sed "s/$ORIGIN_DB/$DESTINATION_DB/g" > "$REPLACED_BACKUP"
-  echo "Replacement completed at ${REPLACED_BACKUP}"
 fi
 
-echo "Starting restore..."
+echo "Starting restore to ${DESTINATION_HOST}..."
 
 pv "${REPLACED_BACKUP:-$BACKUP_FILE}" | mysql --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host="${DESTINATION_IP}"
 
