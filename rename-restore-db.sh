@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 
-parsed_args=$(getopt -o hu:o:d:O:D:p: --long help,user:,origin-host:,destination-host:,origin-db:,destination-db:,port: -- "$@")
-
-if [ $? -ne 0 ]; then
+if ! parsed_args=$(getopt -o hu:o:d:O:D:p: --long help,user:,origin-host:,destination-host:,origin-db:,destination-db:,port: -- "$@");
+then
     print_error "Error: Invalid option"
     exit 1
 fi
@@ -28,7 +27,7 @@ EOF
 function print_error() {
   RED='\033[0;31m'
   NC='\033[0m'
-  printf "${RED}$1${NC}\n"
+  printf "%s$1%s\n" "${RED}" "${NC}" 
 }
 
 function clean_up() {
@@ -107,13 +106,13 @@ if [ -z "$DESTINATION_DB" ]; then
   DESTINATION_DB="$ORIGIN_DB"
 fi
 
-if [ "$KEEP_DB_NAME" == true && "$SAME_HOST" == true ]; then
+if [ "$KEEP_DB_NAME" == true ] && [ "$SAME_HOST" == true ]; then
   echo "Error: Same host and same DB name, nothing to do"
   exit 1
 fi
 
 if [ -z "$MYSQL_PASS" ]; then
-  read -s -p "MySQL Password: " MYSQL_PASS
+  read -r -s -p "MySQL Password: " MYSQL_PASS
 fi
 
 if [ -z "$MYSQL_PASS" ]; then
@@ -121,9 +120,9 @@ if [ -z "$MYSQL_PASS" ]; then
   exit 1
 fi
 
-ORIGIN_IP=$(dig +short ${ORIGIN_HOST} A | tail -n1)
+ORIGIN_IP=$(dig +short "${ORIGIN_HOST}" A | tail -n1)
 
-DESTINATION_IP=$(dig +short ${DESTINATION_HOST} A | tail -n1)
+DESTINATION_IP=$(dig +short "${DESTINATION_HOST}" A | tail -n1)
 
 BACKUP_FILE="$(mktemp)"
 
@@ -135,7 +134,7 @@ echo ''
 echo 'Getting DB size...'
 
 QUERY_DB_SIZE="SELECT SUM(data_length + index_length) AS 'size' FROM information_schema.TABLES WHERE table_schema = '$ORIGIN_DB';"
-db_size=$(mysql --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host=${ORIGIN_IP} -sn --execute="$QUERY_DB_SIZE") || { print_error "Error: Cannot connect to origin host"; exit 1; }
+db_size=$(mysql --user="${DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${PORT}" --skip-ssl --host="${ORIGIN_IP}" -sn --execute="$QUERY_DB_SIZE") || { print_error "Error: Cannot connect to origin host"; exit 1; }
 backup_size=$(( db_size * 80 / 100 ))
 
 if [ $backup_size -lt 1 ]; then
@@ -146,7 +145,7 @@ fi
 
 if [ "$SAME_HOST" != true ]; then
   QUERY_DB_EXISTS="SELECT 'true' AS 'db_exists' FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '${DESTINATION_DB}';"
-  destination_exists=$(mysql --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host=${DESTINATION_IP} -sn --execute="${QUERY_DB_EXISTS}") || { print_error "Error: Cannot connect to destination host"; exit 1; }
+  destination_exists=$(mysql --user="${DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${PORT}" --skip-ssl --host="${DESTINATION_IP}" -sn --execute="${QUERY_DB_EXISTS}") || { print_error "Error: Cannot connect to destination host"; exit 1; }
 fi
 
 if [ "$destination_exists" == true ]; then
@@ -158,7 +157,7 @@ fi
 echo "DB size $db_size bytes, estimated backup size $backup_size bytes"
 
 echo "Starting backup from ${ORIGIN_HOST}..."
-mysqldump --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host=${ORIGIN_IP} --compress --databases ${ORIGIN_DB} --extended-insert --opt | pv -W -s ${backup_size} > "${BACKUP_FILE}"
+mysqldump --user="${DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${PORT}" --skip-ssl --host="${ORIGIN_IP}" --compress --databases "${ORIGIN_DB}" --extended-insert --opt | pv -W -s ${backup_size} > "${BACKUP_FILE}"
 
 RETURN_1=$?
 if [ $RETURN_1 -ne 0 ]; then
@@ -178,11 +177,11 @@ if [ "$KEEP_DB_NAME" != true ]; then
 fi
 
 echo "Replacing values in ${BACKUP_FILE} to ${REPLACED_BACKUP}..."
-pv "$BACKUP_FILE" | sed -e ${SED_COMMAND}  > "$REPLACED_BACKUP"
+pv "$BACKUP_FILE" | sed -e "${SED_COMMAND}"  > "$REPLACED_BACKUP"
 
 echo "Starting restore to ${DESTINATION_HOST}..."
 
-pv "${REPLACED_BACKUP:-$BACKUP_FILE}" | mysql --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host="${DESTINATION_IP}"
+pv "${REPLACED_BACKUP:-$BACKUP_FILE}" | mysql --user="${DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${PORT}" --skip-ssl --host="${DESTINATION_IP}"
 
 if [ $? -ne 0 ]; then
   clean_up
