@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 parsed_args=$(getopt -o hu:o:d:O:D:p: --long help,user:,origin-host:,destination-host:,origin-db:,destination-db:,port: -- "$@")
 
@@ -32,9 +32,16 @@ function print_error() {
 }
 
 function clean_up() {
-  [ -e "$BACKUP_FILE" ] && rm -f "$BACKUP_FILE"
-  [ -e "$REPLACED_BACKUP" ] && rm -f "$REPLACED_BACKUP"
+  [[ -e "$BACKUP_FILE" ]] && rm -f "$BACKUP_FILE"
+  [[ -e "$REPLACED_BACKUP" ]] && rm -f "$REPLACED_BACKUP"
 }
+
+trap "{ clean_up ; print_error 'Aborted' ; exit 255; }" SIGINT SIGTERM
+
+command -v mysqldump >/dev/null 2>&1 || { print_error "Error: mysqldump not found"; exit 3; }
+command -v mysql >/dev/null 2>&1 || { print_error "Error: mysql not found"; exit 3; }
+command -v pv >/dev/null 2>&1 || { print_error "Error: pv not found"; exit 3; }
+
 
 while true ; do
     case "$1" in
@@ -89,13 +96,20 @@ SAME_HOST=false
 KEEP_DB_NAME=false
 
 if [ -z "$DESTINATION_HOST" ]; then
+  echo "Using same host for origin and destination"
   SAME_HOST=true
   DESTINATION_HOST="$ORIGIN_HOST"
 fi
 
 if [ -z "$DESTINATION_DB" ]; then
+  echo "Keeping DB name at restore"
   KEEP_DB_NAME=true
   DESTINATION_DB="$ORIGIN_DB"
+fi
+
+if [ "$KEEP_DB_NAME" == true && "$SAME_HOST" == true ]; then
+  echo "Error: Same host and same DB name, nothing to do"
+  exit 1
 fi
 
 if [ -z "$MYSQL_PASS" ]; then
@@ -106,7 +120,6 @@ if [ -z "$MYSQL_PASS" ]; then
   print_error "Error: Password is required"
   exit 1
 fi
-
 
 ORIGIN_IP=$(dig +short ${ORIGIN_HOST} A | tail -n1)
 
@@ -121,13 +134,25 @@ fi
 echo ''
 echo 'Getting DB size...'
 
-db_size=$(mysql --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host=${ORIGIN_IP} -sn --execute="SELECT SUM(data_length + index_length) AS 'size' FROM information_schema.TABLES WHERE table_schema = '$ORIGIN_DB';")
+QUERY_DB_SIZE="SELECT SUM(data_length + index_length) AS 'size' FROM information_schema.TABLES WHERE table_schema = '$ORIGIN_DB';"
+db_size=$(mysql --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host=${ORIGIN_IP} -sn --execute="$QUERY_DB_SIZE") || { print_error "Error: Cannot connect to origin host"; exit 1; }
 backup_size=$(( db_size * 80 / 100 ))
 
 if [ $backup_size -lt 1 ]; then
   clean_up
   print_error "Error: Unable to get DB size"
   exit 3
+fi
+
+if [ "$SAME_HOST" != true ]; then
+  QUERY_DB_EXISTS="SELECT 'true' AS 'db_exists' FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '${DESTINATION_DB}';"
+  destination_exists=$(mysql --user=${DB_USER} --password=${MYSQL_PASS} --protocol=TCP --port=${PORT} --skip-ssl --host=${DESTINATION_IP} -sn --execute="${QUERY_DB_EXISTS}") || { print_error "Error: Cannot connect to destination host"; exit 1; }
+fi
+
+if [ "$destination_exists" == true ]; then
+  read -p "Destination DB already exists, overwrite? " -n 1 -r
+  echo ''
+  [[ ! $REPLY =~ ^[Yy]$ ]] && { print_error "Aborted"; clean_up; exit 5; }
 fi
 
 echo "DB size $db_size bytes, estimated backup size $backup_size bytes"
@@ -144,11 +169,16 @@ fi
 
 echo "DB Backup completed at ${BACKUP_FILE}"
 
+echo "Removing DEFINER to restore without SUPER privileges..."
+SED_COMMAND='s/\sDEFINER=`[^`]*`@`[^`]*`//g'
+
 if [ "$KEEP_DB_NAME" != true ]; then
-  echo "Replacing DB name in ${REPLACED_BACKUP} from ${ORIGIN_DB} to ${DESTINATION_DB}..."
-  total_lines=$(wc -l < "$BACKUP_FILE")
-  pv "$BACKUP_FILE" | sed "s/$ORIGIN_DB/$DESTINATION_DB/g" > "$REPLACED_BACKUP"
+  echo "DB name ${ORIGIN_DB} would be replaced with ${DESTINATION_DB}..."
+  SED_COMMAND+="; s/${ORIGIN_DB}/${DESTINATION_DB}/g"
 fi
+
+echo "Replacing values in ${BACKUP_FILE} to ${REPLACED_BACKUP}..."
+pv "$BACKUP_FILE" | sed -e ${SED_COMMAND}  > "$REPLACED_BACKUP"
 
 echo "Starting restore to ${DESTINATION_HOST}..."
 
