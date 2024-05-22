@@ -27,7 +27,7 @@ EOF
 function print_error() {
   RED='\033[0;31m'
   NC='\033[0m'
-  printf "%s$1%s\n" "${RED}" "${NC}" 
+  printf "%b$1%b\n" "${RED}" "${NC}" 
 }
 
 function clean_up() {
