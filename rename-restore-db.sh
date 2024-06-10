@@ -126,7 +126,7 @@ if [ -z "$DESTINATION_DB" ]; then
   DESTINATION_DB="$ORIGIN_DB"
 fi
 
-if [ "$KEEP_DB_NAME" == true ] && [ "$SAME_HOST" == true ]; then
+if [ "$KEEP_DB_NAME" == true ] && [ "$SAME_HOST" == true ] && [ "$EXPORT" != true ]; then
   echo "Error: Same host and same DB name, nothing to do"
   exit 1
 fi
@@ -163,28 +163,6 @@ if [ $backup_size -lt 1 ]; then
   exit 3
 fi
 
-if [ "$SAME_HOST" != true ]; then
-  read -p "Use different password for destination? (y/n) " -n 1 -r
-  echo ''
-fi
-
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-  read -r -s -p "Destination MySQL Password: " DESTINATION_MYSQL_PASS
-else
-  DESTINATION_MYSQL_PASS="$MYSQL_PASS"
-fi
-
-if [ "$SAME_HOST" != true ]; then
-  QUERY_DB_EXISTS="SELECT 'true' AS 'db_exists' FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '${DESTINATION_DB}';"
-  destination_exists=$(mysql --user="${DESTINATION_DB_USER}" --password="${DESTINATION_MYSQL_PASS}" --protocol=TCP --port="${DESTINATION_PORT}" --skip-ssl --host="${DESTINATION_IP}" -sn --execute="${QUERY_DB_EXISTS}") || { print_error "Error: Cannot connect to destination host"; exit 1; }
-fi
-
-if [ "$destination_exists" == true ]; then
-  read -p "Destination DB already exists, overwrite? " -n 1 -r
-  echo ''
-  [[ ! $REPLY =~ ^[Yy]$ ]] && { print_error "Aborted"; clean_up; exit 5; }
-fi
-
 echo "DB size $db_size bytes, estimated backup size $backup_size bytes"
 
 echo "Starting backup from ${ORIGIN_HOST}..."
@@ -211,10 +189,36 @@ echo "Replacing values in ${BACKUP_FILE} to ${REPLACED_BACKUP}..."
 pv "$BACKUP_FILE" | sed -e "${SED_COMMAND}"  > "${REPLACED_BACKUP}"
 
 if [ "$EXPORT" == true ]; then
-  cp "$BACKUP_FILE" "${HOME}/${DESTINATION_DB}-$(date --iso-8601).sql"
+  export_path="${HOME}/${DESTINATION_DB}-$(date --iso-8601).sql"
+  cp "$BACKUP_FILE" export_path
+  echo "backup file saved to ${export_path}"
+  exit
 fi
 
 echo "Starting restore to ${DESTINATION_HOST}..."
+
+# Check if destination DB exists
+if [ "$SAME_HOST" != true ]; then
+  read -p "Use different password for destination? (y/n) " -n 1 -r
+  echo ''
+fi
+
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+  read -r -s -p "Destination MySQL Password: " DESTINATION_MYSQL_PASS
+else
+  DESTINATION_MYSQL_PASS="$MYSQL_PASS"
+fi
+
+if [ "$SAME_HOST" != true ]; then
+  QUERY_DB_EXISTS="SELECT 'true' AS 'db_exists' FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '${DESTINATION_DB}';"
+  destination_exists=$(mysql --user="${DESTINATION_DB_USER}" --password="${DESTINATION_MYSQL_PASS}" --protocol=TCP --port="${DESTINATION_PORT}" --skip-ssl --host="${DESTINATION_IP}" -sn --execute="${QUERY_DB_EXISTS}") || { print_error "Error: Cannot connect to destination host"; exit 1; }
+fi
+
+if [ "$destination_exists" == true ]; then
+  read -p "Destination DB already exists, overwrite? " -n 1 -r
+  echo ''
+  [[ ! $REPLY =~ ^[Yy]$ ]] && { print_error "Aborted"; clean_up; exit 5; }
+fi
 
 pv "${REPLACED_BACKUP:-$BACKUP_FILE}" | mysql --user="${DESTINATION_DB_USER}" --password="${DESTINATION_MYSQL_PASS}" --protocol=TCP --port="${DESTINATION_PORT}" --skip-ssl --host="${DESTINATION_IP}"
 
