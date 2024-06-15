@@ -33,6 +33,7 @@ function check_command() {
   command -v "$1" >/dev/null 2>&1 || { print_error "Error: $1 not found"; exit 3; }
 }
 
+# Trap signals to clean up
 trap 'clean_up; print_error "Aborted"; exit 255' SIGINT SIGTERM
 
 # Check if required commands are available
@@ -45,6 +46,9 @@ if ! parsed_args=$(getopt -o hu:o:O:p:U:d:D:P:e --long help,origin-user:,origin-
   print_error "Error: Invalid option"
   exit 1
 fi
+
+echo "${parsed_args}"
+
 eval set -- "$parsed_args"
 
 # Process arguments
@@ -146,18 +150,27 @@ if [[ -z "$MYSQL_PASS" ]]; then
   exit 1
 fi
 
-# Resolve IP addresses
+# Resolve IP addresses, throw error if not found
 ORIGIN_IP=$(dig +short "${ORIGIN_HOST}" A | tail -n1)
+if [[ -z "$ORIGIN_IP" ]]; then
+  print_error "Error: Cannot resolve origin host"
+  exit 1
+fi
+
 DESTINATION_IP=$(dig +short "${DESTINATION_HOST}" A | tail -n1)
+if [[ -z "$DESTINATION_IP" ]]; then
+  print_error "Error: Cannot resolve destination host"
+  exit 1
+fi
 
 # Create temporary files for backup
 TMP_DIR=$(mktemp -d /tmp/backup.XXXXXX)
 BACKUP_FILE="$TMP_DIR/backup.sql"
 
 echo 'Getting DB size...'
-QUERY_DB_SIZE="SELECT SUM(data_length + index_length) AS 'size' FROM information_schema.TABLES WHERE table_schema = '$ORIGIN_DB';"
-db_size=$(mysql --user="${ORIGIN_DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${ORIGIN_PORT}" --skip-ssl --host="${ORIGIN_IP}" -sn --execute="$QUERY_DB_SIZE") || { print_error "Error: Cannot connect to origin host"; exit 1; }
-backup_size=$(( db_size * 80 / 100 ))
+QUERY_DB_SIZE="SELECT SUM(data_length) AS 'size' FROM information_schema.TABLES WHERE table_schema = '$ORIGIN_DB';"
+db_size=$(mysql --user="${ORIGIN_DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${ORIGIN_PORT}" --skip-ssl --database=information_schema --host="${ORIGIN_IP}" --skip-column-names --silent --execute="$QUERY_DB_SIZE") || { print_error "Error: Cannot connect to origin host"; exit 1; }
+backup_size=$(( db_size * 1 ))
 
 if [[ $backup_size -lt 1 ]]; then
   clean_up
@@ -165,10 +178,10 @@ if [[ $backup_size -lt 1 ]]; then
   exit 3
 fi
 
-echo "DB size $db_size bytes, estimated backup size $backup_size bytes"
+echo "Estimated backup size is $backup_size bytes"
 
 echo "Starting backup from ${ORIGIN_HOST}..."
-mysqldump --user="${ORIGIN_DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${ORIGIN_PORT}" --skip-ssl --host="${ORIGIN_IP}" --compress --databases "${ORIGIN_DB}" --extended-insert --opt | pv -W -s ${backup_size} > "${BACKUP_FILE}"
+mysqldump --user="${ORIGIN_DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${ORIGIN_PORT}" --skip-ssl --host="${ORIGIN_IP}" --compress --databases "${ORIGIN_DB}" --extended-insert --opt | pv --wait --eta --progress --rate --size ${backup_size} > "${BACKUP_FILE}"
 
 RETURN_1=$?
 if [[ $RETURN_1 -ne 0 ]]; then
@@ -179,12 +192,14 @@ fi
 
 echo "DB Backup completed at ${BACKUP_FILE}"
 
+DB_NAME_REPLACE=false
 if [[ "$KEEP_DB_NAME" != true ]]; then
   echo "DB name ${ORIGIN_DB} will be replaced with ${DESTINATION_DB} in the backup file..."
   DB_NAME_REPLACE=true
   SED_COMMAND="s/${ORIGIN_DB}/${DESTINATION_DB}/g"
 fi
 
+NO_DEFINER=false
 read -p "Remove definer from backup? (y/n) " -n 1 -r
 echo ''
 if [[ $REPLY =~ ^[Yy]$ ]]; then
@@ -197,7 +212,7 @@ fi
 
 if [[ -n "$SED_COMMAND" ]]; then
   echo "Replacing values in ${BACKUP_FILE}..."
-  sed -i -e "${SED_COMMAND}" "$BACKUP_FILE"
+  sed --in-place --expression="${SED_COMMAND}" "$BACKUP_FILE"
 fi
 
 # Export backup file to home
