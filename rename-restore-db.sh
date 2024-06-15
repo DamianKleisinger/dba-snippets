@@ -26,8 +26,7 @@ EOF
 }
 
 function clean_up() {
-  [[ -e "$BACKUP_FILE" ]] && rm -f "$BACKUP_FILE"
-  [[ -e "$REPLACED_BACKUP" ]] && rm -f "$REPLACED_BACKUP"
+  [[ -d "$TMP_DIR" ]] && rm -rf "$TMP_DIR"
 }
 
 function check_command() {
@@ -37,7 +36,7 @@ function check_command() {
 trap 'clean_up; print_error "Aborted"; exit 255' SIGINT SIGTERM
 
 # Check if required commands are available
-for cmd in mysqldump mysql pv; do
+for cmd in mysqldump mysql pv dig; do
   check_command "$cmd"
 done
 
@@ -104,7 +103,7 @@ while true; do
 done
 
 # Validate mandatory parameters
-if [ -z "$ORIGIN_DB_USER" ] || [ -z "$ORIGIN_HOST" ] || [ -z "$ORIGIN_DB" ]; then
+if [[ -z "$ORIGIN_DB_USER" || -z "$ORIGIN_HOST" || -z "$ORIGIN_DB" ]]; then
   print_error "Error: Missing mandatory parameters"
   print_help
   exit 1
@@ -154,7 +153,6 @@ DESTINATION_IP=$(dig +short "${DESTINATION_HOST}" A | tail -n1)
 # Create temporary files for backup
 TMP_DIR=$(mktemp -d /tmp/backup.XXXXXX)
 BACKUP_FILE="$TMP_DIR/backup.sql"
-REPLACED_BACKUP="$TMP_DIR/replaced_backup.sql"
 
 echo 'Getting DB size...'
 QUERY_DB_SIZE="SELECT SUM(data_length + index_length) AS 'size' FROM information_schema.TABLES WHERE table_schema = '$ORIGIN_DB';"
@@ -173,7 +171,7 @@ echo "Starting backup from ${ORIGIN_HOST}..."
 mysqldump --user="${ORIGIN_DB_USER}" --password="${MYSQL_PASS}" --protocol=TCP --port="${ORIGIN_PORT}" --skip-ssl --host="${ORIGIN_IP}" --compress --databases "${ORIGIN_DB}" --extended-insert --opt | pv -W -s ${backup_size} > "${BACKUP_FILE}"
 
 RETURN_1=$?
-if [ $RETURN_1 -ne 0 ]; then
+if [[ $RETURN_1 -ne 0 ]]; then
   clean_up
   print_error "Error: mysqldump failed with exit code ${RETURN_1}"
   exit 2
@@ -183,6 +181,7 @@ echo "DB Backup completed at ${BACKUP_FILE}"
 
 if [[ "$KEEP_DB_NAME" != true ]]; then
   echo "DB name ${ORIGIN_DB} will be replaced with ${DESTINATION_DB} in the backup file..."
+  DB_NAME_REPLACE=true
   SED_COMMAND="s/${ORIGIN_DB}/${DESTINATION_DB}/g"
 fi
 
@@ -190,28 +189,28 @@ read -p "Remove definer from backup? (y/n) " -n 1 -r
 echo ''
 if [[ $REPLY =~ ^[Yy]$ ]]; then
   echo "Removing DEFINER to restore without SUPER privileges..."
+  NO_DEFINER=true
   SED_COMMAND+="${SED_COMMAND:+;}"
+  # shellcheck disable=SC2016
   SED_COMMAND+='s/\sDEFINER=`[^`]*`@`[^`]*`//g'
 fi
 
 if [[ -n "$SED_COMMAND" ]]; then
-  echo "Replacing values in ${BACKUP_FILE} to ${REPLACED_BACKUP}..."
-  # TODO: replace file in place to avoid disk space issues
-  # sed -i -e "${SED_COMMAND}" "$BACKUP_FILE"
-  pv "$BACKUP_FILE" | sed -e "${SED_COMMAND}" > "${REPLACED_BACKUP}"
-  rm -f "$BACKUP_FILE"
-else
-  rm -f "$REPLACED_BACKUP"
-  REPLACED_BACKUP="$BACKUP_FILE"
+  echo "Replacing values in ${BACKUP_FILE}..."
+  sed -i -e "${SED_COMMAND}" "$BACKUP_FILE"
 fi
 
 # Export backup file to home
 function export_backup() {
-  local export_path="${HOME}/${DESTINATION_DB}-$(date --iso-8601)-replaced.sql"
-  if [[ -e "$REPLACED_BACKUP" ]]; then
-    echo "Saving replaced backup file to ${export_path}"
-    mv "$REPLACED_BACKUP" "${export_path}"
+  local export_path
+  export_path="${HOME}/${DESTINATION_DB}-$(date --iso-8601)${DB_NAME_REPLACE:+-renamed}${NO_DEFINER:+-no-definer}.sql"
+  if [[ ! -e "$BACKUP_FILE" ]]; then
+    print_error "Error: Missing backup file"
+    exit 4
   fi
+
+  echo "Saving replaced backup file to ${export_path}"
+  mv "$BACKUP_FILE" "${export_path}"
 }
 
 if [[ "$EXPORT_ONLY" == true ]]; then
@@ -245,7 +244,7 @@ if [[ "$destination_exists" == true ]]; then
   [[ ! $REPLY =~ ^[Yy]$ ]] && { print_error "Aborted"; clean_up; exit 5; }
 fi
 
-pv "${REPLACED_BACKUP}" | mysql --user="${DESTINATION_DB_USER}" --password="${DESTINATION_MYSQL_PASS}" --protocol=TCP --port="${DESTINATION_PORT}" --skip-ssl --host="${DESTINATION_IP}"
+pv "${BACKUP_FILE}" | mysql --user="${DESTINATION_DB_USER}" --password="${DESTINATION_MYSQL_PASS}" --protocol=TCP --port="${DESTINATION_PORT}" --skip-ssl --host="${DESTINATION_IP}"
 IMPORT_RETURN_CODE=$?
 if [[ $IMPORT_RETURN_CODE -ne 0 ]]; then
   clean_up

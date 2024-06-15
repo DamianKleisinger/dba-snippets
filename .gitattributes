@@ -1,0 +1,10 @@
+# .gitattributes
+
+# Handle line endings automatically for files detected as text
+* text=auto
+
+# Bash files
+*.sh text eol=lf
+
+# SQL files
+*.sql text eol=lf
